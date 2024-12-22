@@ -25,11 +25,13 @@ import (
 	"io"
 	"strings"
 	"time"
+	// "runtime"
+	"runtime/debug"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"go.uber.org/zap"
 	"golang.org/x/exp/mmap"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus/internal/log"
@@ -40,6 +42,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/paramtable"
 	"github.com/milvus-io/milvus/internal/util/retry"
 	"github.com/milvus-io/milvus/internal/util/timerecord"
+	"github.com/openucx/ucx/bindings/go/src/ucx/http"
 )
 
 var (
@@ -100,11 +103,20 @@ func newMinioChunkManagerWithConfig(ctx context.Context, c *config) (*MinioChunk
 			creds = credentials.NewStaticV4(c.accessKeyID, c.secretAccessKeyID, "")
 		}
 	}
+
+	transport, err := http.NewTransport(c.address)
+	if err != nil {
+		log.Warn("http.NewClient", zap.Error(err))
+		return nil, err
+	}
+
 	minioOpts := &minio.Options{
 		BucketLookup: bucketLookupType,
 		Creds:        creds,
 		Secure:       c.useSSL,
+		Transport:    transport,
 	}
+	log.Warn("### newMinioFn", zap.String("Address", c.address))
 	minIOClient, err := newMinioFn(c.address, minioOpts)
 	// options nil or invalid formatted endpoint, don't need to retry
 	if err != nil {
@@ -186,11 +198,15 @@ func (mcm *MinioChunkManager) Reader(ctx context.Context, filePath string) (File
 }
 
 func (mcm *MinioChunkManager) Size(ctx context.Context, filePath string) (int64, error) {
+	log.Warn("### Size,Stat MINIO Object")
 	objectInfo, err := mcm.statMinioObject(ctx, mcm.bucketName, filePath, minio.StatObjectOptions{})
+	log.Warn("### Size,Stat MINIO Object Return")
 	if err != nil {
 		log.Warn("failed to stat object", zap.String("path", filePath), zap.Error(err))
 		return 0, err
 	}
+
+	log.Warn("### Object size", zap.Int64("Size", objectInfo.Size))
 
 	return objectInfo.Size, nil
 }
@@ -226,6 +242,7 @@ func (mcm *MinioChunkManager) MultiWrite(ctx context.Context, kvs map[string][]b
 
 // Exist checks whether chunk is saved to minio storage.
 func (mcm *MinioChunkManager) Exist(ctx context.Context, filePath string) (bool, error) {
+	log.Warn("### Exist,Stat MINIO Object")
 	_, err := mcm.statMinioObject(ctx, mcm.bucketName, filePath, minio.StatObjectOptions{})
 	if err != nil {
 		errResponse := minio.ToErrorResponse(err)
@@ -477,6 +494,8 @@ func (mcm *MinioChunkManager) getMinioObject(ctx context.Context, bucketName, ob
 	opts minio.GetObjectOptions) (*minio.Object, error) {
 	start := timerecord.NewTimeRecorder("getMinioObject")
 
+	log.Warn("### Get MINIO Object")
+
 	reader, err := mcm.Client.GetObject(ctx, bucketName, objectName, opts)
 	metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataGetLabel, metrics.TotalLabel).Inc()
 	if err == nil && reader != nil {
@@ -492,6 +511,8 @@ func (mcm *MinioChunkManager) getMinioObject(ctx context.Context, bucketName, ob
 func (mcm *MinioChunkManager) putMinioObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64,
 	opts minio.PutObjectOptions) (minio.UploadInfo, error) {
 	start := timerecord.NewTimeRecorder("putMinioObject")
+
+	log.Warn("### Put MINIO Object")
 
 	info, err := mcm.Client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataPutLabel, metrics.TotalLabel).Inc()
@@ -509,12 +530,17 @@ func (mcm *MinioChunkManager) statMinioObject(ctx context.Context, bucketName, o
 	opts minio.StatObjectOptions) (minio.ObjectInfo, error) {
 	start := timerecord.NewTimeRecorder("statMinioObject")
 
+	log.Warn("### Stat MINIO Object")
+	
 	info, err := mcm.Client.StatObject(ctx, bucketName, objectName, opts)
+	log.Warn("### Stat MINIO Object Returned")
 	metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataStatLabel, metrics.TotalLabel).Inc()
 	if err == nil {
+		log.Warn("### Stat MINIO Object Got Success!!!")
 		metrics.PersistentDataRequestLatency.WithLabelValues(metrics.DataStatLabel).Observe(float64(start.ElapseSpan().Milliseconds()))
 		metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataStatLabel, metrics.SuccessLabel).Inc()
 	} else {
+		log.Warn("### Stat MINIO Object Got Error!!!")
 		metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataStatLabel, metrics.FailLabel).Inc()
 	}
 
@@ -524,6 +550,8 @@ func (mcm *MinioChunkManager) statMinioObject(ctx context.Context, bucketName, o
 func (mcm *MinioChunkManager) listMinioObjects(ctx context.Context, bucketName string,
 	opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
 	start := timerecord.NewTimeRecorder("listMinioObjects")
+
+	log.Warn("### List MINIO Object")
 
 	res := mcm.Client.ListObjects(ctx, bucketName, opts)
 	metrics.PersistentDataRequestLatency.WithLabelValues(metrics.DataListLabel).Observe(float64(start.ElapseSpan().Milliseconds()))
@@ -537,6 +565,8 @@ func (mcm *MinioChunkManager) removeMinioObjects(ctx context.Context, bucketName
 	opts minio.RemoveObjectsOptions) <-chan minio.RemoveObjectError {
 	start := timerecord.NewTimeRecorder("removeMinioObjects")
 
+	log.Warn("### Remove MINIO Objects")
+
 	res := mcm.Client.RemoveObjects(ctx, bucketName, objectsCh, opts)
 	metrics.PersistentDataRequestLatency.WithLabelValues(metrics.DataRemoveLabel).Observe(float64(start.ElapseSpan().Milliseconds()))
 	metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataRemoveLabel, metrics.TotalLabel).Inc()
@@ -548,6 +578,8 @@ func (mcm *MinioChunkManager) removeMinioObjects(ctx context.Context, bucketName
 func (mcm *MinioChunkManager) removeMinioObject(ctx context.Context, bucketName, objectName string,
 	opts minio.RemoveObjectOptions) error {
 	start := timerecord.NewTimeRecorder("removeMinioObject")
+
+	log.Warn("### Remove MINIO Object")
 
 	err := mcm.Client.RemoveObject(ctx, bucketName, objectName, opts)
 	metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataRemoveLabel, metrics.TotalLabel).Inc()
