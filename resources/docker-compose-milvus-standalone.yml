@@ -1,0 +1,70 @@
+version: '3.5'
+
+services:
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    network_mode: "host"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
+    command: etcd -advertise-client-urls=http://1.1.60.19:2379 -listen-client-urls http://1.1.60.19:2379 --data-dir /etcd
+
+  standalone:
+    container_name: milvus-standalone
+    # image: milvusdb/milvus:v2.2.10
+    image: milvus_ucx_client_docker
+    command: ["milvus", "run", "standalone"]
+    # command: ["bash"]
+    stdin_open: true
+    environment:
+      # ETCD_ENDPOINTS: etcd:2379
+      ETCD_ENDPOINTS: 1.1.60.19:2379
+      # MINIO_ADDRESS: 1.1.60.20:3334
+      MINIO_UCX_ADDRESS: 1.1.60.20:9000
+      MILVUS_ENGINE_GPU_ENABLED: "true"
+      MILVUS_ENGINE_GPU_SEARCH_THRESHOLD: "1000"
+      MILVUS_ENGINE_GPU_BUILD_INDEX: "true"
+      MILVUS_ENGINE_GPU_RESOURCES: "gpu0"
+      xUCX_LOG_LEVEL: req
+      xUCX_ZCOPY_THRESH: "-1"
+      xUCX_RCACHE_ENABLE: "n"
+      xUCX_GVA_ENABLE: "on"
+      xUCX_IB_MLX5_DEVX_OBJECTS: ""
+      xGODEBUG: "madvdontneed=0"
+      xUCX_LOG_FILE: ${UCX_LOG_FILE}
+      # LD_LIBRARY_PATH: "/usr/local/cuda/lib64:/milvus/lib:/milvus/openssl-1.1.1q:/hpc/newhome/ofarjon/vdb/ucx-ubuntu/install/lib:${LD_LIBRARY_PATH}"
+      LD_LIBRARY_PATH: "/usr/local/cuda/lib64:/milvus/lib:/milvus/openssl-1.1.1q:/Devl/ucx/install-ubuntu/lib:${LD_LIBRARY_PATH}"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+      - /hpc/local:/hpc/local
+      - /hpc/newhome/ofarjon/vdb:/hpc/newhome/ofarjon/vdb
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    deploy:
+      resources:
+          reservations:
+            cpus: '10'
+            memory: 20G
+          limits:
+            cpus: '10'
+            memory: 20G
+    devices:
+      - /dev/infiniband:/dev/infiniband
+    network_mode: "host"
+    depends_on:
+      - "etcd"
+      # - "minio"
+    ulimits:
+      memlock: 
+        soft: -1
+        hard: -1
+
+# networks:
+#   default:
+#     name: milvus
