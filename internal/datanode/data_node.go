@@ -501,7 +501,7 @@ func (node *DataNode) Start() error {
 		return errors.New("DataNode fail to connect etcd")
 	}
 
-	chunkManager, err := node.factory.NewPersistentStorageChunkManager(node.ctx)
+	chunkManager, err := node.factory.NewPersistentStorageChunkManagerUcxTransport(node.ctx)
 
 	if err != nil {
 		return err

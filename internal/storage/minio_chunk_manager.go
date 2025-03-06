@@ -25,8 +25,7 @@ import (
 	"io"
 	"strings"
 	"time"
-	// "runtime"
-	"runtime/debug"
+	"os"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -104,19 +103,103 @@ func newMinioChunkManagerWithConfig(ctx context.Context, c *config) (*MinioChunk
 		}
 	}
 
-	transport, err := http.NewTransport(c.address)
+	minioOpts := &minio.Options{
+		BucketLookup: bucketLookupType,
+		Creds:        creds,
+		Secure:       c.useSSL,
+	}
+	log.Warn("### newMinioFn", zap.String("Address", c.address))
+	minIOClient, err := newMinioFn(c.address, minioOpts)
+	// options nil or invalid formatted endpoint, don't need to retry
 	if err != nil {
-		log.Warn("http.NewClient", zap.Error(err))
 		return nil, err
+	}
+	var bucketExists bool
+	// check valid in first query
+	checkBucketFn := func() error {
+		bucketExists, err = minIOClient.BucketExists(ctx, c.bucketName)
+		if err != nil {
+			log.Warn("failed to check blob bucket exist", zap.String("bucket", c.bucketName), zap.Error(err))
+			return err
+		}
+		if !bucketExists {
+			if c.createBucket {
+				log.Info("blob bucket not exist, create bucket.", zap.Any("bucket name", c.bucketName))
+				err := minIOClient.MakeBucket(ctx, c.bucketName, minio.MakeBucketOptions{})
+				if err != nil {
+					log.Warn("failed to create blob bucket", zap.String("bucket", c.bucketName), zap.Error(err))
+					return err
+				}
+			} else {
+				return fmt.Errorf("bucket %s not Existed", c.bucketName)
+			}
+		}
+		return nil
+	}
+	err = retry.Do(ctx, checkBucketFn, retry.Attempts(CheckBucketRetryAttempts))
+	if err != nil {
+		return nil, err
+	}
+
+	mcm := &MinioChunkManager{
+		Client:     minIOClient,
+		bucketName: c.bucketName,
+	}
+	mcm.rootPath = mcm.normalizeRootPath(c.rootPath)
+	log.Info("minio chunk manager init success.", zap.String("bucketname", c.bucketName), zap.String("root", mcm.RootPath()))
+	return mcm, nil
+}
+
+func newMinioChunkManagerWithConfigUcxTransport(ctx context.Context, c *config) (*MinioChunkManager, error) {
+	var creds *credentials.Credentials
+	var newMinioFn = minio.New
+	var bucketLookupType = minio.BucketLookupAuto
+
+	switch c.cloudProvider {
+	case paramtable.CloudProviderAliyun:
+		// auto doesn't work for aliyun, so we set to dns deliberately
+		bucketLookupType = minio.BucketLookupDNS
+		if c.useIAM {
+			newMinioFn = aliyun.NewMinioClient
+		} else {
+			creds = credentials.NewStaticV4(c.accessKeyID, c.secretAccessKeyID, "")
+		}
+	case paramtable.CloudProviderGCP:
+		newMinioFn = gcp.NewMinioClient
+		if !c.useIAM {
+			creds = credentials.NewStaticV2(c.accessKeyID, c.secretAccessKeyID, "")
+		}
+	default: // aws, minio
+		if c.useIAM {
+			creds = credentials.NewIAM("")
+		} else {
+			creds = credentials.NewStaticV4(c.accessKeyID, c.secretAccessKeyID, "")
+		}
 	}
 
 	minioOpts := &minio.Options{
 		BucketLookup: bucketLookupType,
 		Creds:        creds,
 		Secure:       c.useSSL,
-		Transport:    transport,
+		// Transport:    transport,
 	}
-	log.Warn("### newMinioFn", zap.String("Address", c.address))
+
+	if val, ok := os.LookupEnv("MINIO_UCX_ADDRESS"); ok {
+		c.address = val
+		transport, err := http.NewTransport(c.address)
+		if transport == nil {
+			log.Warn("http.NewClient", zap.Error(err))
+			return nil, err
+		}
+		
+		if err != nil {
+			log.Warn("http.NewClient", zap.Error(err))
+			return nil, err
+		}
+
+		minioOpts.Transport = transport
+	}
+
 	minIOClient, err := newMinioFn(c.address, minioOpts)
 	// options nil or invalid formatted endpoint, don't need to retry
 	if err != nil {
@@ -242,7 +325,6 @@ func (mcm *MinioChunkManager) MultiWrite(ctx context.Context, kvs map[string][]b
 
 // Exist checks whether chunk is saved to minio storage.
 func (mcm *MinioChunkManager) Exist(ctx context.Context, filePath string) (bool, error) {
-	log.Warn("### Exist,Stat MINIO Object")
 	_, err := mcm.statMinioObject(ctx, mcm.bucketName, filePath, minio.StatObjectOptions{})
 	if err != nil {
 		errResponse := minio.ToErrorResponse(err)
@@ -512,8 +594,6 @@ func (mcm *MinioChunkManager) putMinioObject(ctx context.Context, bucketName, ob
 	opts minio.PutObjectOptions) (minio.UploadInfo, error) {
 	start := timerecord.NewTimeRecorder("putMinioObject")
 
-	log.Warn("### Put MINIO Object")
-
 	info, err := mcm.Client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	metrics.PersistentDataOpCounter.WithLabelValues(metrics.DataPutLabel, metrics.TotalLabel).Inc()
 	if err == nil {
@@ -529,8 +609,6 @@ func (mcm *MinioChunkManager) putMinioObject(ctx context.Context, bucketName, ob
 func (mcm *MinioChunkManager) statMinioObject(ctx context.Context, bucketName, objectName string,
 	opts minio.StatObjectOptions) (minio.ObjectInfo, error) {
 	start := timerecord.NewTimeRecorder("statMinioObject")
-
-	log.Warn("### Stat MINIO Object")
 	
 	info, err := mcm.Client.StatObject(ctx, bucketName, objectName, opts)
 	log.Warn("### Stat MINIO Object Returned")

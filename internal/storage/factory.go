@@ -46,6 +46,8 @@ func (f *ChunkManagerFactory) newChunkManager(ctx context.Context, engine string
 		return NewLocalChunkManager(RootPath(f.config.rootPath)), nil
 	case "minio":
 		return newMinioChunkManagerWithConfig(ctx, f.config)
+	case "ucx":
+		return newMinioChunkManagerWithConfigUcxTransport(ctx, f.config)
 	default:
 		return nil, errors.New("no chunk manager implemented with engine: " + engine)
 	}
@@ -55,6 +57,11 @@ func (f *ChunkManagerFactory) NewPersistentStorageChunkManager(ctx context.Conte
 	return f.newChunkManager(ctx, f.persistentStorage)
 }
 
+func (f *ChunkManagerFactory) NewPersistentStorageChunkManagerUcxTransport(ctx context.Context) (ChunkManager, error) {
+	return f.newChunkManager(ctx, "ucx")
+}
+
 type Factory interface {
 	NewPersistentStorageChunkManager(ctx context.Context) (ChunkManager, error)
+	NewPersistentStorageChunkManagerUcxTransport(ctx context.Context) (ChunkManager, error)
 }

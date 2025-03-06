@@ -103,8 +103,13 @@ func (f *DefaultFactory) NewPersistentStorageChunkManager(ctx context.Context) (
 	return f.chunkManagerFactory.NewPersistentStorageChunkManager(ctx)
 }
 
+func (f *DefaultFactory) NewPersistentStorageChunkManagerUcxTransport(ctx context.Context) (storage.ChunkManager, error) {
+	return f.chunkManagerFactory.NewPersistentStorageChunkManagerUcxTransport(ctx)
+}
+
 type Factory interface {
 	msgstream.Factory
 	Init(p *paramtable.ComponentParam)
 	NewPersistentStorageChunkManager(ctx context.Context) (storage.ChunkManager, error)
+	NewPersistentStorageChunkManagerUcxTransport(ctx context.Context) (storage.ChunkManager, error)
 }

@@ -3,6 +3,7 @@ package storage
 // Option for setting params used by chunk manager client.
 type config struct {
 	address           string
+	ucxAddress        string
 	bucketName        string
 	accessKeyID       string
 	secretAccessKeyID string

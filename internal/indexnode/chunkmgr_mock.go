@@ -231,6 +231,13 @@ func (f *mockFactory) NewPersistentStorageChunkManager(context.Context) (storage
 	return nil, fmt.Errorf("factory not inited")
 }
 
+func (f *mockFactory) NewPersistentStorageChunkManagerUcxTransport(context.Context) (storage.ChunkManager, error) {
+	if f.chunkMgr != nil {
+		return f.chunkMgr, nil
+	}
+	return nil, fmt.Errorf("factory not inited")
+}
+
 func (f *mockFactory) Init(*paramtable.ComponentParam) {
 	// do nothing
 }
